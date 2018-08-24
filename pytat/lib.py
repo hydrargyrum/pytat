@@ -47,7 +47,7 @@ class ReplacerVisitor(ast.NodeTransformer):
 
             if self.separators:
                 print('#=# generated code')
-            print(node.col_offset * ' ', astor.to_source(ret), sep='')
+            print(node.col_offset * ' ', astor.to_source(ret), sep='', end='')
             if self.separators:
                 print('#=# end generated code')
 
