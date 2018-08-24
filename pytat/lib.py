@@ -1,6 +1,7 @@
 # license: WTFPLv2 [http://wtfpl.net]
 
 import ast
+import bisect
 import linecache
 import re
 
@@ -10,10 +11,13 @@ import astor
 class State:
     Normal = 0
     Replace = 1
-    NextStmt = 2
 
 
-class LineMarker(ast.NodeVisitor):
+class StatementIndex(ast.NodeVisitor):
+    def __init__(self):
+        super(StatementIndex, self).__init__()
+        self.stmt_lines = set()
+
     @staticmethod
     def _get_last_lineno(node):
         return getattr(node, 'last_lineno', getattr(node, 'lineno', -1))
@@ -34,19 +38,23 @@ class LineMarker(ast.NodeVisitor):
                 self.visit(value)
                 node.last_lineno = max(node.last_lineno, self._get_last_lineno(value))
 
+        if isinstance(node, ast.stmt):
+            self.stmt_lines.add(node.lineno)
+
     def visit_Module(self, node):
         for stmt in node.body:
             self.visit(stmt)
 
 
 class ReplacerVisitor(ast.NodeTransformer):
-    def __init__(self, fn):
+    def __init__(self, fn, stmt_lines):
         super(ReplacerVisitor, self).__init__()
         self.fn = fn
         self.first_line = 1
         self.last_line = 1
         self.state = State.Normal
         self.separators = False
+        self.stmt_lines = stmt_lines
 
     def visit(self, node):
         if isinstance(node, ast.stmt):
@@ -61,25 +69,25 @@ class ReplacerVisitor(ast.NodeTransformer):
     def _visit_stmt(self, node):
         if self.state == State.Normal:
             self.last_line = node.lineno
-        elif self.state == State.NextStmt:
-            self.first_line = self.last_line = node.lineno
-            self.state = State.Normal
         else:
             assert 0
 
         ret = self.generic_visit(node)
 
         if self.state == State.Replace:
+            self.last_line = node.lineno
             self.dump_current()
+
+            node_end = self._stmt_end(node)
 
             if self.separators:
                 print('#=# generated code from line', node.lineno)
             print(node.col_offset * ' ', astor.to_source(ret), sep='', end='')
             if self.separators:
-                print('#=# end generated code to line', node.last_lineno)
+                print('#=# end generated code to line', node_end)
 
             self.state = State.Normal
-            self.first_line = self.last_line = node.last_lineno + 1
+            self.first_line = self.last_line = node_end + 1
 
         return ret
 
@@ -108,6 +116,21 @@ class ReplacerVisitor(ast.NodeTransformer):
         if self.separators:
             print('#=# to the end')
 
+    blank_comments = re.compile(r'|#.*')
+
+    def _stmt_end(self, node):
+        index = bisect.bisect_right(self.stmt_lines, node.last_lineno)
+        try:
+            next_stmt_lineno = self.stmt_lines[index]
+        except IndexError:
+            return node.last_lineno # TODO should be file end
+
+        i = next_stmt_lineno - 1
+        for i in range(next_stmt_lineno - 1, node.last_lineno - 1, -1):
+            line = linecache.getline(self.fn, i)
+            if not self.blank_comments.fullmatch(line.strip()):
+                break
+        return i
 
 def match_ast(expected, test):
     """
@@ -182,9 +205,11 @@ def visit_file(filename, cls):
     with open(filename) as fd:
         node = ast.parse(fd.read(), filename)
 
-    LineMarker().visit(node)
+    liner = StatementIndex()
+    liner.visit(node)
+    stmt_lines = tuple(sorted(liner.stmt_lines))
 
-    visitor = cls(filename)
+    visitor = cls(filename, stmt_lines)
     visitor.visit(node)
     visitor.dump_to_end()
 
