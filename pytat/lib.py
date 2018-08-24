@@ -10,6 +10,33 @@ import astor
 class State:
     Normal = 0
     Replace = 1
+    NextStmt = 2
+
+
+class LineMarker(ast.NodeVisitor):
+    @staticmethod
+    def _get_last_lineno(node):
+        return getattr(node, 'last_lineno', getattr(node, 'lineno', -1))
+
+    def generic_visit(self, node):
+        if not hasattr(node, 'lineno'):
+            return
+
+        node.last_lineno = node.lineno
+
+        for f, value in ast.iter_fields(node):
+            if isinstance(value, list):
+                for sub in value:
+                    if isinstance(sub, ast.AST):
+                        self.visit(sub)
+                        node.last_lineno = max(node.last_lineno, self._get_last_lineno(sub))
+            elif isinstance(value, ast.AST):
+                self.visit(value)
+                node.last_lineno = max(node.last_lineno, self._get_last_lineno(value))
+
+    def visit_Module(self, node):
+        for stmt in node.body:
+            self.visit(stmt)
 
 
 class ReplacerVisitor(ast.NodeTransformer):
@@ -34,7 +61,7 @@ class ReplacerVisitor(ast.NodeTransformer):
     def _visit_stmt(self, node):
         if self.state == State.Normal:
             self.last_line = node.lineno
-        elif self.state == State.Replace:
+        elif self.state == State.NextStmt:
             self.first_line = self.last_line = node.lineno
             self.state = State.Normal
         else:
@@ -46,19 +73,25 @@ class ReplacerVisitor(ast.NodeTransformer):
             self.dump_current()
 
             if self.separators:
-                print('#=# generated code')
+                print('#=# generated code from line', node.lineno)
             print(node.col_offset * ' ', astor.to_source(ret), sep='', end='')
             if self.separators:
-                print('#=# end generated code')
+                print('#=# end generated code to line', node.last_lineno)
+
+            self.state = State.Normal
+            self.first_line = self.last_line = node.last_lineno + 1
 
         return ret
 
     def dump_current(self):
         if self.separators:
-            print('#=# dump from line', self.first_line, 'to line', self.last_line)
+            print('#=# dump from line', self.first_line)
 
         for i in range(self.first_line, self.last_line):
             print(linecache.getline(self.fn, i), end='')
+
+        if self.separators:
+            print('#=# to line', self.last_line - 1)
 
     def dump_to_end(self):
         if self.separators:
@@ -71,6 +104,9 @@ class ReplacerVisitor(ast.NodeTransformer):
                 break
             print(line, end='')
             i += 1
+
+        if self.separators:
+            print('#=# to the end')
 
 
 def match_ast(expected, test):
@@ -145,6 +181,8 @@ def visit_file(filename, cls):
     """
     with open(filename) as fd:
         node = ast.parse(fd.read(), filename)
+
+    LineMarker().visit(node)
 
     visitor = cls(filename)
     visitor.visit(node)
