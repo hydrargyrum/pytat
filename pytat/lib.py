@@ -55,6 +55,7 @@ class ReplacerVisitor(ast.NodeTransformer):
         self.state = State.Normal
         self.separators = False
         self.stmt_lines = stmt_lines
+        self.out = sys.stdout
 
     def visit(self, node):
         if isinstance(node, ast.stmt):
@@ -81,10 +82,10 @@ class ReplacerVisitor(ast.NodeTransformer):
             node_end = self._stmt_end(node)
 
             if self.separators:
-                print('#=# generated code from line', node.lineno)
-            print(node.col_offset * ' ', astor.to_source(ret), sep='', end='')
+                print('#=# generated code from line', node.lineno, file=self.out)
+            print(node.col_offset * ' ', astor.to_source(ret), sep='', end='', file=self.out)
             if self.separators:
-                print('#=# end generated code to line', node_end)
+                print('#=# end generated code to line', node_end, file=self.out)
 
             self.state = State.Normal
             self.first_line = self.last_line = node_end + 1
@@ -93,28 +94,28 @@ class ReplacerVisitor(ast.NodeTransformer):
 
     def dump_current(self):
         if self.separators:
-            print('#=# dump from line', self.first_line)
+            print('#=# dump from line', self.first_line, file=self.out)
 
         for i in range(self.first_line, self.last_line):
-            print(linecache.getline(self.fn, i), end='')
+            print(linecache.getline(self.fn, i), end='', file=self.out)
 
         if self.separators:
-            print('#=# to line', self.last_line - 1)
+            print('#=# to line', self.last_line - 1, file=self.out)
 
     def dump_to_end(self):
         if self.separators:
-            print('#=# dump after line', self.first_line)
+            print('#=# dump after line', self.first_line, file=self.out)
 
         i = self.first_line
         while True:
             line = linecache.getline(self.fn, i)
             if not line:
                 break
-            print(line, end='')
+            print(line, end='', file=self.out)
             i += 1
 
         if self.separators:
-            print('#=# to the end')
+            print('#=# to the end', file=self.out)
 
     blank_comments = re.compile(r'|#.*')
 
