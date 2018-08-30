@@ -3,7 +3,10 @@
 import ast
 import bisect
 import linecache
+import os
 import re
+import sys
+import tempfile
 
 import astor
 
@@ -197,7 +200,7 @@ def ast_expr_from_module(node):
     return node.body[0].value
 
 
-def visit_file(filename, cls):
+def visit_file(filename, cls, inplace=False):
     """
     Read and visit a file using `cls` visitor.
 
@@ -211,6 +214,11 @@ def visit_file(filename, cls):
     stmt_lines = tuple(sorted(liner.stmt_lines))
 
     visitor = cls(filename, stmt_lines)
+    if inplace:
+        visitor.out = tempfile.NamedTemporaryFile(mode='w+t', dir=os.path.dirname(filename))
+
     visitor.visit(node)
     visitor.dump_to_end()
 
+    if inplace:
+        os.link(visitor.out.name, filename)
