@@ -8,7 +8,6 @@ import re
 import sys
 import tempfile
 
-import astor
 
 
 class State:
@@ -202,6 +201,30 @@ def ast_expr_from_module(node):
     assert isinstance(node.body[0], ast.Expr)
 
     return node.body[0].value
+
+
+def ast_to_source_astor(node):
+    import astor
+
+    return astor.to_source(node).strip()
+
+
+def ast_to_source_unparse(node):
+    import astunparse
+
+    return astunparse.unparse(node).strip()
+
+
+AST_TO_SOURCE_CALLBACKS = (ast_to_source_unparse, ast_to_source_astor)
+
+
+def ast_to_source(node):
+    for cb in AST_TO_SOURCE_CALLBACKS:
+        try:
+            return cb(node)
+        except ImportError:
+            pass
+    raise ImportError('astunparse or astor should be installed')
 
 
 def visit_file(filename, cls, inplace=False):
