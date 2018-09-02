@@ -86,7 +86,7 @@ class ReplacerVisitor(ast.NodeTransformer):
             if self.separators:
                 print('#=# generated code from line', node.lineno, file=self.out)
 
-            src = astor.to_source(ret)
+            src = ast_to_source(ret)
             for line in src.split('\n'):
                 print(node.col_offset * ' ', line, sep='', file=self.out)
 
