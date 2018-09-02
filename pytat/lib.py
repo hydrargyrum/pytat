@@ -9,6 +9,11 @@ import sys
 import tempfile
 
 
+__all__ = (
+    'ReplacerVisitor', 'match_ast', 'ast_expr_from_module', 'ast_to_source',
+    'visit_file',
+)
+
 
 class State:
     Normal = 0
@@ -16,16 +21,42 @@ class State:
 
 
 class StatementIndex(ast.NodeVisitor):
+    """Helper class to find statement lines
+
+    Fills `last_lineno` of most nodes to indicate where is the last start line
+    in sub-nodes.
+
+    For example:
+
+    1   if foo:
+    2       print('foo')
+
+    The 'If' node starts at line 1, so its lineno is 1. The 'Call' node for the
+    print has lineno 2, and is contained in the 'If' node, so the 'last_lineno'
+    of the 'If' node is 2.
+    It is a loose indication of where the whole 'if' block ends.
+
+    'stmt_lines' indicates line numbers where a statement starts.
+    The real end of the block is between the 'last_lineno' and the next line
+    referred to in 'stmt_lines'.
+
+    A mostly accurate indication where a statement block ends can be found by
+    looking the last non-blank-or-comment line between this bounds.
+    """
+
     def __init__(self):
         super(StatementIndex, self).__init__()
         self.stmt_lines = set()
 
     @staticmethod
     def _get_last_lineno(node):
+        # some nodes don't have lineno. -1 should be enough because max() is used
         return getattr(node, 'last_lineno', getattr(node, 'lineno', -1))
 
     def generic_visit(self, node):
         if not hasattr(node, 'lineno'):
+            # those nodes generally don't have interesting sub-nodes anyway
+            # except Module
             return
 
         node.last_lineno = node.lineno
@@ -126,6 +157,11 @@ class ReplacerVisitor(ast.NodeTransformer):
     blank_comments = re.compile(r'|#.*')
 
     def _stmt_end(self, node):
+        """
+        Find line where the node statement block ends.
+
+        See StatementIndex class for details.
+        """
         index = bisect.bisect_right(self.stmt_lines, node.last_lineno)
         try:
             next_stmt_lineno = self.stmt_lines[index]
@@ -138,6 +174,7 @@ class ReplacerVisitor(ast.NodeTransformer):
             if not self.blank_comments.fullmatch(line.strip()):
                 break
         return i
+
 
 def match_ast(expected, test):
     """

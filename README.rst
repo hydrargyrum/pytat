@@ -13,6 +13,9 @@ Usage
 PyTat is a library. It's typically used by writing a class transforming AST
 nodes as desired (see examples dir), and running it on a Python source file.
 
+The `Green tree snakes <https://greentreesnakes.readthedocs.io/en/latest/index.html>`_ is a
+useful documentation when working with ASTs.
+
 Dependencies
 ------------
 
