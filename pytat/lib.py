@@ -176,19 +176,23 @@ class ReplacerVisitor(ast.NodeTransformer):
         return i
 
 
+simple_re = re.compile(r'_\d+')
+variadic_re = re.compile(r'__\d+')
+
+
 def match_ast(expected, test):
     """
     Match 2 AST nodes together. If `expected` contains placeholders, they will
     `test` nodes and will be returned in a dict.
     Returns None if nodes don't match. Else return a dict matching placeholders.
     """
-    if isinstance(expected, ast.Name) and re.fullmatch(r'_\d+', expected.id):
+    if isinstance(expected, ast.Name) and simple_re.fullmatch(expected.id):
         return {expected.id: test}
 
     if type(expected) != type(test):
         return
 
-    if isinstance(expected, ast.Attribute) and re.fullmatch(r'_\d+', expected.attr):
+    if isinstance(expected, ast.Attribute) and simple_re.fullmatch(expected.attr):
         ret = {expected.attr: test.attr}
 
         sub = match_ast(expected.value, test.value)
@@ -203,7 +207,7 @@ def match_ast(expected, test):
         assert fe == ft
 
         if isinstance(ve, list):
-            if ve and isinstance(ve[0], ast.Name) and re.fullmatch(r'__\d+', ve[0].id):
+            if ve and isinstance(ve[0], ast.Name) and variadic_re.fullmatch(ve[0].id):
                 assert len(ve) == 1
                 ret.update({ve[0].id: vt})
                 continue
