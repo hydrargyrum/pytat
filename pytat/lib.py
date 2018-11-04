@@ -181,6 +181,41 @@ simple_re = re.compile(r'_\d+')
 variadic_re = re.compile(r'__\d+')
 
 
+def _fields_of_2(a, b):
+    """Return dict of fields of both nodes.
+
+    Key is field name, value is a pair containing the field values for the 2
+    nodes. If a field is missing on one node, None is used instead of the
+    missing value.
+    """
+    ret = {}
+
+    for f, v in ast.iter_fields(a):
+        l = ret.setdefault(f, [None, None])
+        l[0] = v
+
+    for f, v in ast.iter_fields(b):
+        l = ret.setdefault(f, [None, None])
+        l[1] = v
+
+    for k in ret:
+        ret[k] = tuple(ret[k])
+
+    return ret
+
+
+def _variadic_point(l):
+    ret = -1
+
+    for n, el in enumerate(l):
+        if isinstance(el, ast.Name) and variadic_re.fullmatch(el.id):
+            if ret >= 0:
+                raise ValueError('only one variadic argument should be used')
+            ret = n
+
+    return ret
+
+
 def match_ast(expected, test):
     """
     Match 2 AST nodes together. If `expected` contains placeholders, they will
@@ -204,23 +239,51 @@ def match_ast(expected, test):
         return ret
 
     ret = {}
-    for (fe, ve), (ft, vt) in zip(ast.iter_fields(expected), ast.iter_fields(test)):
-        assert fe == ft
-
+    fields = _fields_of_2(expected, test)
+    for fe, (ve, vt) in fields.items():
         if isinstance(ve, list):
-            if ve and isinstance(ve[0], ast.Name) and variadic_re.fullmatch(ve[0].id):
-                assert len(ve) == 1
-                ret.update({ve[0].id: vt})
-                continue
-
-            if len(ve) != len(vt):
+            if not isinstance(vt, list):
                 return
-            for vve, vvt in zip(ve, vt):
-                sub = match_ast(vve, vvt)
-                if sub is None:
+
+            # | x | y |   __1   | z |
+            # +---+---+---------+---+
+            # | 0 | 1 |2(vpoint)| 3 |
+
+            vpoint = _variadic_point(ve)
+
+            if vpoint < 0:
+                if len(ve) != len(vt):
                     return
 
-                ret.update(sub)
+                for vve, vvt in zip(ve, vt):
+                    sub = match_ast(vve, vvt)
+                    if sub is None:
+                        return
+
+                    ret.update(sub)
+            else:
+                if len(ve) > len(vt):
+                    # FIXME variadic can be empty? if yes, use len(ve)-1
+                    return
+
+                for vve, vvt in zip(ve[:vpoint], vt[:vpoint]):
+                    sub = match_ast(vve, vvt)
+                    if sub is None:
+                        return
+
+                    ret.update(sub)
+
+                variadic_len = len(vt) - len(ve) + 1
+
+                ret[ve[vpoint].id] = vt[vpoint:vpoint + variadic_len]
+
+                for vve, vvt in zip(ve[vpoint + 1:], vt[vpoint + variadic_len:]):
+                    sub = match_ast(vve, vvt)
+                    if sub is None:
+                        return
+
+                    ret.update(sub)
+
         elif isinstance(ve, ast.AST):
             sub = match_ast(ve, vt)
             if sub is None:
