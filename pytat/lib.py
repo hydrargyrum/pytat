@@ -256,7 +256,24 @@ def ast_to_source_unparse(node):
     return astunparse.unparse(node).strip()
 
 
-AST_TO_SOURCE_CALLBACKS = (ast_to_source_unparse, ast_to_source_astor)
+def ast_to_source_meta(node):
+    import meta
+
+    return meta.dump_python_source(node).strip()
+
+
+def ast_to_source_decompile(node):
+    from ast_decompiler import decompile
+
+    return decompile(node).strip()
+
+
+AST_TO_SOURCE_CALLBACKS = (
+    ast_to_source_unparse,
+    ast_to_source_astor,
+    ast_to_source_meta,
+    ast_to_source_decompile,
+)
 
 
 def ast_to_source(node):
