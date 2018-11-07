@@ -2,6 +2,7 @@
 
 import ast
 import bisect
+import copy
 import linecache
 import os
 import re
@@ -90,11 +91,14 @@ class ReplacerVisitor(ast.NodeTransformer):
         self.stmt_lines = stmt_lines
         self.out = sys.stdout
 
+    def visit_node(self, node):
+        return super(ReplacerVisitor, self).visit(node)
+
     def visit(self, node):
         if isinstance(node, ast.stmt):
             return self._visit_stmt(node)
 
-        ret = super(ReplacerVisitor, self).visit(node)
+        ret = self.visit_node(node)
         if ret is not node:
             ast.copy_location(ret, node)
             self.state = State.Replace
@@ -174,6 +178,33 @@ class ReplacerVisitor(ast.NodeTransformer):
             if not self.blank_comments.fullmatch(line.strip()):
                 break
         return i
+
+
+class TableVisitor(ReplacerVisitor):
+    replacement_table = None
+
+    def visit_node(self, node):
+        table = self.replacement_table
+        if hasattr(self.replacement_table, 'items'):
+            table = self.replacement_table.items()
+
+        for expected, repl in table:
+            captures = match_ast(expected, node)
+            if captures is None:
+                continue
+
+            if repl is None:
+                return None
+
+            if callable(repl):
+                return repl(captures)
+
+            assert isinstance(repl, ast.AST)
+            repl = copy.deepcopy(repl)
+            replace_ast(repl, captures)
+            return repl
+
+        return super(TableVisitor, self).visit_node(node)
 
 
 simple_re = re.compile(r'_\d+')
@@ -293,6 +324,36 @@ def match_ast(expected, test):
             return
 
     return ret
+
+
+def is_simple_expr(node):
+    return isinstance(node, ast.Name) and simple_re.fullmatch(node.id)
+
+
+def _replace_ast_list(ve, captures):
+    for n, vve in enumerate(ve):
+        if is_simple_expr(vve):
+            ve[n] = captures[vve.id]
+        else:
+            replace_ast(vve, captures)
+
+
+def replace_ast(repl, captures):
+    for fe, ve in ast.iter_fields(repl):
+        if isinstance(ve, list):
+            vpoint = _variadic_point(ve)
+
+            _replace_ast_list(ve, captures)
+
+            if vpoint >= 0:
+                ve[vpoint:vpoint+1] = captures[ve[vpoint].id]
+
+        elif is_simple_expr(ve):
+            setattr(repl, fe, captures[ve.id])
+        elif isinstance(ve, ast.Attribute) and simple_re.fullmatch(ve.attr):
+            ve.attr = captures[ve.attr]
+        elif isinstance(ve, ast.AST):
+            replace_ast(ve, captures)
 
 
 def ast_expr_from_module(node):
