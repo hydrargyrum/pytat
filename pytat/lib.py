@@ -280,11 +280,23 @@ def visit_file(filename, cls, inplace=False):
     stmt_lines = tuple(sorted(liner.stmt_lines))
 
     visitor = cls(filename, stmt_lines)
-    if inplace:
-        visitor.out = tempfile.NamedTemporaryFile(mode='w+t', dir=os.path.dirname(filename))
 
-    visitor.visit(node)
-    visitor.dump_to_end()
+    def do_visit():
+        visitor.visit(node)
+        visitor.dump_to_end()
 
     if inplace:
-        os.link(visitor.out.name, filename)
+        visitor.out = tempfile.NamedTemporaryFile(mode='w+t', dir=os.path.dirname(filename), delete=False)
+        try:
+            with visitor.out:
+                do_visit()
+        except:
+            os.unlink(visitor.out.name)
+            raise
+        else:
+            os.rename(visitor.out.name, filename)
+    else:
+        try:
+            do_visit()
+        except BrokenPipeError:
+            pass
