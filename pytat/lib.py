@@ -45,9 +45,10 @@ class StatementIndex(ast.NodeVisitor):
     looking the last non-blank-or-comment line between this bounds.
     """
 
-    def __init__(self):
+    def __init__(self, fn):
         super(StatementIndex, self).__init__()
         self.stmt_lines = set()
+        self.fn = fn
 
     @staticmethod
     def _get_last_lineno(node):
@@ -78,6 +79,114 @@ class StatementIndex(ast.NodeVisitor):
     def visit_Module(self, node):
         for stmt in node.body:
             self.visit(stmt)
+
+    def visit_If(self, node):
+        # "elif" and "else" aren't statements addressed by the "ast module
+        # and thus have no line number info. For pytat to be able to keep
+        # them verbatim, they must be registered in the StatemendIndex though
+        #
+        #   if foo:
+        #       bar
+        #   elif baz:
+        #       qux
+        #
+        # is the same as:
+        #
+        #   if foo:
+        #       bar
+        #   else:
+        #       if baz:
+        #           qux
+        #
+        # also in:
+        #
+        #   if foo:
+        #       bar
+        #   else:
+        #       baz
+        self.generic_visit(node)
+
+        if not getattr(node, 'orelse', None):
+            return
+
+        assert node.body
+        last_if_stmt = node.body[-1]
+
+        if isinstance(node.orelse[0], ast.If):
+            # "else:\n  if...", not "elif..."
+            search = re.compile(r'\s*elif\b')
+        else:
+            # "else:\n  ...", not "else:..."
+            search = re.compile(r'\s*else\b')
+
+        self._visit_else(node, 'orelse', last_if_stmt, search)
+
+    def visit_For(self, node):
+        self.generic_visit(node)
+
+        search = re.compile(r'\s*else\b')
+        #self._visit_else(node, search)
+
+        if not getattr(node, 'orelse', None):
+            return
+
+        assert node.orelse
+        assert node.body
+        last_if_stmt = node.body[-1]
+
+        search = re.compile(r'\s*else\b')
+
+        # look for the "else"
+        elsebody = node.orelse[0]
+        line = linecache.getline(self.fn, elsebody.lineno)
+        if not search.match(line):
+            else_lineno = _last_stmt_line(self.fn, last_if_stmt.last_lineno, elsebody.lineno)
+            line = linecache.getline(self.fn, else_lineno)
+            assert not line.lstrip().startswith(':') # "else\\\n:  ..."
+            self.stmt_lines.add(else_lineno)
+
+    def visit_For(self, node):
+        self.generic_visit(node)
+
+        search = re.compile(r'\s*else\b')
+        last_if_stmt = node.body[-1]
+        self._visit_else(node, 'orelse', last_if_stmt, search)
+
+    visit_AsyncFor = visit_For
+    visit_While = visit_For
+
+    def visit_Try(self, node):
+        self.generic_visit(node)
+
+        assert node.body
+        assert node.handlers or node.finalbody
+        assert (not node.orelse) or node.handlers
+
+        for handler in node.handlers:
+            self.stmt_lines.add(handler.lineno)
+
+        last_stmt = node.body[-1]
+        if node.handlers:
+            last_stmt = node.handlers[-1].body[-1]
+        self._visit_else(node, 'orelse', last_stmt, re.compile(r'\s*else\b'))
+
+        if getattr(node, 'orelse', None):
+            last_stmt = node.orelse[-1]
+        self._visit_else(node, 'finalbody', last_stmt, re.compile(r'\s*finally\b'))
+
+    def _visit_else(self, node, field, last_stmt, reobj):
+        cont = getattr(node, field, None)
+        if not cont:
+            return
+
+        # look for the "else"
+        subbody = cont[0]
+        line = linecache.getline(self.fn, subbody.lineno)
+        if not reobj.match(line):
+            else_lineno = _last_stmt_line(self.fn, last_stmt.last_lineno, subbody.lineno)
+            line = linecache.getline(self.fn, else_lineno)
+            assert not line.lstrip().startswith(':')  # e.g. "else\\\n:  ..."
+            self.stmt_lines.add(else_lineno)
 
 
 class ReplacerVisitor(ast.NodeTransformer):
@@ -426,7 +535,7 @@ def visit_file(filename, cls, inplace=False):
     with open(filename) as fd:
         node = ast.parse(fd.read(), filename)
 
-    liner = StatementIndex()
+    liner = StatementIndex(filename)
     liner.visit(node)
     stmt_lines = tuple(sorted(liner.stmt_lines))
 
