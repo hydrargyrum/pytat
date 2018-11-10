@@ -159,7 +159,6 @@ class ReplacerVisitor(ast.NodeTransformer):
         if self.separators:
             print('#=# to the end', file=self.out)
 
-    blank_comments = re.compile(r'|#.*')
 
     def _stmt_end(self, node):
         """
@@ -173,12 +172,17 @@ class ReplacerVisitor(ast.NodeTransformer):
         except IndexError:
             return node.last_lineno # TODO should be file end
 
-        i = next_stmt_lineno - 1
-        for i in range(next_stmt_lineno - 1, node.last_lineno - 1, -1):
-            line = linecache.getline(self.fn, i)
-            if not self.blank_comments.fullmatch(line.strip()):
-                break
-        return i
+        return _last_stmt_line(self.fn, node.last_lineno, next_stmt_lineno)
+
+
+def _last_stmt_line(filename, lower, upper):
+    assert lower <= upper
+    i = upper - 1
+    for i in range(upper - 1, lower - 1, -1):
+        line = linecache.getline(filename, i)
+        if not blank_or_comments.fullmatch(line.strip()):
+            break
+    return i
 
 
 class TableVisitor(ReplacerVisitor):
@@ -210,6 +214,7 @@ class TableVisitor(ReplacerVisitor):
 
 simple_re = re.compile(r'_\d+')
 variadic_re = re.compile(r'__\d+')
+blank_or_comments = re.compile(r'|#.*')
 
 
 def _fields_of_2(a, b):
