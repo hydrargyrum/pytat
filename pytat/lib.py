@@ -270,6 +270,8 @@ def visit_file(filename, cls, inplace=False):
 
     `cls` must be a `ReplacerVisitor` subclass.
     """
+
+    linecache.checkcache(filename)
     with open(filename) as fd:
         node = ast.parse(fd.read(), filename)
 
