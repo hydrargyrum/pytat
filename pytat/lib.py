@@ -80,13 +80,14 @@ class StatementIndex(ast.NodeVisitor):
 
 
 class ReplacerVisitor(ast.NodeTransformer):
+    separators = False
+
     def __init__(self, fn, stmt_lines):
         super(ReplacerVisitor, self).__init__()
         self.fn = fn
         self.first_line = 1
         self.last_line = 1
         self.state = State.Normal
-        self.separators = False
         self.stmt_lines = stmt_lines
         self.out = sys.stdout
 
