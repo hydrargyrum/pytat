@@ -45,9 +45,10 @@ class StatementIndex(ast.NodeVisitor):
     looking the last non-blank-or-comment line between this bounds.
     """
 
-    def __init__(self):
+    def __init__(self, fn):
         super(StatementIndex, self).__init__()
         self.stmt_lines = set()
+        self.fn = fn
 
     @staticmethod
     def _get_last_lineno(node):
@@ -78,6 +79,76 @@ class StatementIndex(ast.NodeVisitor):
     def visit_Module(self, node):
         for stmt in node.body:
             self.visit(stmt)
+
+    def visit_If(self, node):
+        # "elif" and "else" aren't statements addressed by the "ast module
+        # and thus have no line number info. For pytat to be able to keep
+        # them verbatim, they must be registered in the StatemendIndex though
+        #
+        #   if foo:
+        #       bar
+        #   elif baz:
+        #       qux
+        #
+        # is the same as:
+        #
+        #   if foo:
+        #       bar
+        #   else:
+        #       if baz:
+        #           qux
+        #
+        # also in:
+        #
+        #   if foo:
+        #       bar
+        #   else:
+        #       baz
+        self.generic_visit(node)
+        if not getattr(node, 'orelse', None):
+            return
+
+        assert node.orelse
+        assert node.body
+        last_if_stmt = node.body[-1]
+
+        if isinstance(node.orelse[0], ast.If):
+            # "else:\n  if...", not "elif..."
+            search = re.compile(r'\s*elif\b')
+        else:
+            # "else:\n  ...", not "else:..."
+            search = re.compile(r'\s*else\b')
+        # look for the "else"
+        elsebody = node.orelse[0]
+        line = linecache.getline(self.fn, elsebody.lineno)
+        if not search.match(line):
+            else_lineno = _last_stmt_line(self.fn, last_if_stmt.last_lineno, elsebody.lineno)
+            line = linecache.getline(self.fn, else_lineno)
+            assert not line.lstrip().startswith(':') # "else\\\n:  ..."
+            self.stmt_lines.add(else_lineno)
+
+        return
+
+        if not isinstance(node.orelse[0], ast.If):
+            # look for the "else"
+            elsebody = node.orelse[0]
+            line = linecache.getline(self.fn, elsebody.lineno)
+            if not re.match(r'\s*else\b', line):
+                # "else:\n  ...", not "else:..."
+                else_lineno = _last_stmt_line(self.fn, last_if_stmt.last_lineno, elsebody.lineno)
+                line = linecache.getline(self.fn, else_lineno)
+                assert not line.lstrip().startswith(':') # "else\\\n:  ..."
+                self.stmt_lines.add(else_lineno)
+        else:
+            elseif = node.orelse[0]
+            line = linecache.getline(self.fn, elseif.lineno)
+            if not re.match(r'\s*elif\b', line):
+                # "else:\n  if...", not "elif..."
+                assert elseif.lineno > 0
+                else_lineno = _last_stmt_line(self.fn, last_if_stmt.last_lineno, elseif.lineno)
+                line = linecache.getline(self.fn, else_lineno)
+                assert not line.lstrip().startswith(':') # "else\\\n:  if..."
+                self.stmt_lines.add(else_lineno)
 
 
 class ReplacerVisitor(ast.NodeTransformer):
@@ -110,7 +181,10 @@ class ReplacerVisitor(ast.NodeTransformer):
         else:
             assert 0
 
-        ret = self.generic_visit(node)
+        ret = self.visit_node(node)
+        if ret is not node:
+            ast.copy_location(ret, node)
+            self.state = State.Replace
 
         if self.state == State.Replace:
             self.last_line = node.lineno
@@ -158,7 +232,6 @@ class ReplacerVisitor(ast.NodeTransformer):
         if self.separators:
             print('#=# to the end', file=self.out)
 
-    blank_comments = re.compile(r'|#.*')
 
     def _stmt_end(self, node):
         """
@@ -172,12 +245,23 @@ class ReplacerVisitor(ast.NodeTransformer):
         except IndexError:
             return node.last_lineno # TODO should be file end
 
+        return _last_stmt_line(self.fn, node.last_lineno, next_stmt_lineno)
         i = next_stmt_lineno - 1
         for i in range(next_stmt_lineno - 1, node.last_lineno - 1, -1):
             line = linecache.getline(self.fn, i)
             if not self.blank_comments.fullmatch(line.strip()):
                 break
         return i
+
+
+def _last_stmt_line(filename, lower, upper):
+    assert lower <= upper
+    i = upper - 1
+    for i in range(upper - 1, lower - 1, -1):
+        line = linecache.getline(filename, i)
+        if not blank_or_comments.fullmatch(line.strip()):
+            break
+    return i
 
 
 class TableVisitor(ReplacerVisitor):
@@ -201,7 +285,7 @@ class TableVisitor(ReplacerVisitor):
 
             assert isinstance(repl, ast.AST)
             repl = copy.deepcopy(repl)
-            replace_ast(repl, captures)
+            repl = replace_ast(repl, captures)
             return repl
 
         return super(TableVisitor, self).visit_node(node)
@@ -209,6 +293,7 @@ class TableVisitor(ReplacerVisitor):
 
 simple_re = re.compile(r'_\d+')
 variadic_re = re.compile(r'__\d+')
+blank_or_comments = re.compile(r'|#.*')
 
 
 def _fields_of_2(a, b):
@@ -339,6 +424,9 @@ def _replace_ast_list(ve, captures):
 
 
 def replace_ast(repl, captures):
+    if is_simple_expr(repl):
+        return captures[repl.id]
+
     for fe, ve in ast.iter_fields(repl):
         if isinstance(ve, list):
             vpoint = _variadic_point(ve)
@@ -354,6 +442,8 @@ def replace_ast(repl, captures):
             ve.attr = captures[ve.attr]
         elif isinstance(ve, ast.AST):
             replace_ast(ve, captures)
+
+    return repl
 
 
 def ast_expr_from_module(node):
@@ -418,7 +508,7 @@ def visit_file(filename, cls, inplace=False):
     with open(filename) as fd:
         node = ast.parse(fd.read(), filename)
 
-    liner = StatementIndex()
+    liner = StatementIndex(filename)
     liner.visit(node)
     stmt_lines = tuple(sorted(liner.stmt_lines))
 
