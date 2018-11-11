@@ -315,7 +315,7 @@ class TableVisitor(ReplacerVisitor):
 
             assert isinstance(repl, ast.AST)
             repl = copy.deepcopy(repl)
-            replace_ast(repl, captures)
+            repl = replace_ast(repl, captures)
             return repl
 
         return super(TableVisitor, self).visit_node(node)
@@ -454,6 +454,9 @@ def _replace_ast_list(ve, captures):
 
 
 def replace_ast(repl, captures):
+    if is_simple_expr(repl):
+        return captures[repl.id]
+
     for fe, ve in ast.iter_fields(repl):
         if isinstance(ve, list):
             vpoint = _variadic_point(ve)
@@ -469,6 +472,8 @@ def replace_ast(repl, captures):
             ve.attr = captures[ve.attr]
         elif isinstance(ve, ast.AST):
             replace_ast(ve, captures)
+
+    return repl
 
 
 def ast_expr_from_module(node):
